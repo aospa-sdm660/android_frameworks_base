@@ -63,14 +63,19 @@ public class KeyguardSimPinViewController
     KeyguardUpdateMonitorCallback mUpdateMonitorCallback = new KeyguardUpdateMonitorCallback() {
         @Override
         public void onSimStateChanged(int subId, int slotId, int simState) {
-            if (DEBUG) Log.v(TAG, "onSimStateChanged(subId=" + subId + ",state=" + simState + ")");
-            if (simState == TelephonyManager.SIM_STATE_READY) {
+            if (DEBUG) Log.v(TAG, "onSimStateChanged(subId=" + subId + ",slotId=" + slotId
+                + ",simState=" + simState + ")");
+
+            if ((simState == TelephonyManager.SIM_STATE_READY)
+                || (simState == TelephonyManager.SIM_STATE_LOADED)) {
                 mRemainingAttempts = -1;
                 resetState();
             } else {
                 resetState();
             }
         }
+
+
     };
 
     protected KeyguardSimPinViewController(KeyguardSimPinView view,
@@ -80,14 +85,13 @@ public class KeyguardSimPinViewController
             KeyguardMessageAreaController.Factory messageAreaControllerFactory,
             LatencyTracker latencyTracker, LiftToActivateListener liftToActivateListener,
             TelephonyManager telephonyManager, FalsingCollector falsingCollector,
-            EmergencyButtonController emergencyButtonController, boolean isNewLayoutEnabled) {
+            EmergencyButtonController emergencyButtonController) {
         super(view, keyguardUpdateMonitor, securityMode, lockPatternUtils, keyguardSecurityCallback,
                 messageAreaControllerFactory, latencyTracker, liftToActivateListener,
                 emergencyButtonController, falsingCollector);
         mKeyguardUpdateMonitor = keyguardUpdateMonitor;
         mTelephonyManager = telephonyManager;
         mSimImageView = mView.findViewById(R.id.keyguard_sim);
-        view.setIsNewLayoutEnabled(isNewLayoutEnabled);
     }
 
     @Override
@@ -98,7 +102,7 @@ public class KeyguardSimPinViewController
     @Override
     void resetState() {
         super.resetState();
-        if (DEBUG) Log.v(TAG, "Resetting state");
+        if (DEBUG) Log.v(TAG, "Resetting state mShowDefaultMessage="+mShowDefaultMessage);
         handleSubInfoChangeIfNeeded();
         mMessageAreaController.setMessage("");
         if (mShowDefaultMessage) {
@@ -117,7 +121,6 @@ public class KeyguardSimPinViewController
     public void onResume(int reason) {
         super.onResume(reason);
         mKeyguardUpdateMonitor.registerCallback(mUpdateMonitorCallback);
-        mView.resetState();
     }
 
     @Override
@@ -130,6 +133,8 @@ public class KeyguardSimPinViewController
             mSimUnlockProgressDialog.dismiss();
             mSimUnlockProgressDialog = null;
         }
+
+        mMessageAreaController.setMessage("");
     }
 
     @Override
@@ -347,11 +352,17 @@ public class KeyguardSimPinViewController
 
     private void handleSubInfoChangeIfNeeded() {
         int subId = mKeyguardUpdateMonitor
-                .getNextSubIdForState(TelephonyManager.SIM_STATE_PIN_REQUIRED);
-        if (subId != mSubId && SubscriptionManager.isValidSubscriptionId(subId)) {
-            mSubId = subId;
+                .getUnlockedSubIdForState(TelephonyManager.SIM_STATE_PIN_REQUIRED);
+        if (SubscriptionManager.isValidSubscriptionId(subId)) {
+           if (DEBUG) Log.v(TAG, "handleSubInfoChangeIfNeeded mSubId="+mSubId+" subId="+ subId);
             mShowDefaultMessage = true;
-            mRemainingAttempts = -1;
+            if(subId != mSubId){
+              mSubId = subId;
+              mRemainingAttempts = -1;
+            }
+        }else{
+            //false by default and keep false except in PIN lock state
+            mShowDefaultMessage = false;
         }
     }
 }
