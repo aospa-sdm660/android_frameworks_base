@@ -17,6 +17,7 @@
 package com.android.systemui.statusbar.notification.stack;
 
 import static android.provider.Settings.Secure.NOTIFICATION_HISTORY_ENABLED;
+import static android.view.View.GONE;
 
 import static com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout.ROWS_ALL;
 import static com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout.ROWS_GENTLE;
@@ -65,6 +66,7 @@ import com.android.systemui.statusbar.notification.row.FooterView;
 import com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout.KeyguardBypassEnabledProvider;
 import com.android.systemui.statusbar.phone.ShadeController;
 import com.android.systemui.statusbar.phone.StatusBar;
+import com.android.systemui.statusbar.phone.UnlockedScreenOffAnimationController;
 
 import org.junit.Assert;
 import org.junit.Before;
@@ -105,6 +107,7 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
     @Mock private NotificationSwipeHelper mNotificationSwipeHelper;
     @Mock private NotificationStackScrollLayoutController mStackScrollLayoutController;
     @Mock private FeatureFlags mFeatureFlags;
+    @Mock private UnlockedScreenOffAnimationController mUnlockedScreenOffAnimationController;
 
     @Before
     @UiThreadTest
@@ -143,7 +146,8 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
                 mGroupMembershipManger,
                 mGroupExpansionManager,
                 mAmbientState,
-                mFeatureFlags);
+                mFeatureFlags,
+                mUnlockedScreenOffAnimationController);
         mStackScrollerInternal.initView(getContext(), mKeyguardBypassEnabledProvider,
                 mNotificationSwipeHelper);
         mStackScroller = spy(mStackScrollerInternal);
@@ -313,6 +317,7 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
     public void testUpdateFooter_oneClearableNotification() {
         setBarStateForTest(StatusBarState.SHADE);
 
+        when(mEmptyShadeView.getVisibility()).thenReturn(GONE);
         when(mStackScrollLayoutController.hasActiveClearableNotifications(ROWS_ALL))
                 .thenReturn(true);
         when(mStackScrollLayoutController.hasActiveNotifications()).thenReturn(true);
@@ -334,6 +339,7 @@ public class NotificationStackScrollLayoutTest extends SysuiTestCase {
         when(mStackScrollLayoutController.hasActiveNotifications()).thenReturn(true);
         when(mStackScrollLayoutController.hasActiveClearableNotifications(ROWS_ALL))
                 .thenReturn(false);
+        when(mEmptyShadeView.getVisibility()).thenReturn(GONE);
 
         FooterView view = mock(FooterView.class);
         mStackScroller.setFooterView(view);

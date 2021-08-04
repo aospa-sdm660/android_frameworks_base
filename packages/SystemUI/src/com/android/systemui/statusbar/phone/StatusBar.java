@@ -21,7 +21,6 @@ import static android.app.StatusBarManager.WINDOW_STATE_SHOWING;
 import static android.app.StatusBarManager.WindowType;
 import static android.app.StatusBarManager.WindowVisibleState;
 import static android.app.StatusBarManager.windowStateToString;
-import static android.hardware.biometrics.BiometricSourceType.FINGERPRINT;
 import static android.view.InsetsState.ITYPE_STATUS_BAR;
 import static android.view.InsetsState.containsType;
 import static android.view.WindowInsetsController.APPEARANCE_LOW_PROFILE_BARS;
@@ -46,8 +45,6 @@ import static com.android.systemui.statusbar.phone.BarTransitions.MODE_WARNING;
 import static com.android.systemui.statusbar.phone.BarTransitions.TransitionMode;
 import static com.android.wm.shell.bubbles.BubbleController.TASKBAR_CHANGED_BROADCAST;
 
-import android.animation.ValueAnimator;
-import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
@@ -121,6 +118,7 @@ import android.view.WindowManagerGlobal;
 import android.view.accessibility.AccessibilityManager;
 import android.widget.DateTimeView;
 
+import androidx.annotation.NonNull;
 import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleOwner;
 import androidx.lifecycle.LifecycleRegistry;
@@ -402,8 +400,6 @@ public class StatusBar extends SystemUI implements DemoMode,
     private LightRevealScrim mLightRevealScrim;
     private WiredChargingRippleController mChargingRippleAnimationController;
     private PowerButtonReveal mPowerButtonReveal;
-    private CircleReveal mCircleReveal;
-    private ValueAnimator mCircleRevealAnimator = ValueAnimator.ofFloat(0f, 1f);
 
     private final Object mQueueLock = new Object();
 
@@ -1189,7 +1185,8 @@ public class StatusBar extends SystemUI implements DemoMode,
                                 mOngoingCallController,
                                 mAnimationScheduler,
                                 mStatusBarLocationPublisher,
-                                mNotificationIconAreaController),
+                                mNotificationIconAreaController,
+                                mFeatureFlags),
                         CollapsedStatusBarFragment.TAG)
                 .commit();
 
@@ -1247,6 +1244,8 @@ public class StatusBar extends SystemUI implements DemoMode,
         mScrimController.attachViews(scrimBehind, notificationsScrim, scrimInFront, scrimForBubble);
 
         mLightRevealScrim = mNotificationShadeWindowView.findViewById(R.id.light_reveal_scrim);
+        mLightRevealScrim.setRevealAmountListener(
+                mNotificationShadeWindowController::setLightRevealScrimAmount);
         mUnlockedScreenOffAnimationController.initialize(this, mLightRevealScrim);
         updateLightRevealScrimVisibility();
 
@@ -1424,7 +1423,6 @@ public class StatusBar extends SystemUI implements DemoMode,
         mNotificationAnimationProvider = new NotificationLaunchAnimatorControllerProvider(
                 mNotificationShadeWindowViewController,
                 mStackScrollerController.getNotificationListContainer(),
-                mNotificationShadeDepthControllerLazy.get(),
                 mHeadsUpManager
         );
 
@@ -1478,9 +1476,7 @@ public class StatusBar extends SystemUI implements DemoMode,
      * @param why the reason for the wake up
      */
     public void wakeUpIfDozing(long time, View where, String why) {
-        if (mDozing && !(mKeyguardViewMediator.isAnimatingScreenOff()
-                || mUnlockedScreenOffAnimationController
-                    .isScreenOffLightRevealAnimationPlaying())) {
+        if (mDozing && !mUnlockedScreenOffAnimationController.isScreenOffAnimationPlaying()) {
             mPowerManager.wakeUp(
                     time, PowerManager.WAKE_REASON_GESTURE, "com.android.systemui:" + why);
             mWakeUpComingFromTouch = true;
@@ -1695,7 +1691,7 @@ public class StatusBar extends SystemUI implements DemoMode,
                 && ((mDisabled2 & StatusBarManager.DISABLE2_QUICK_SETTINGS) == 0)
                 && !mDozing
                 && !ONLY_CORE_APPS;
-        mNotificationPanelViewController.setQsExpansionEnabled(expandEnabled);
+        mNotificationPanelViewController.setQsExpansionEnabledPolicy(expandEnabled);
         Log.d(TAG, "updateQsExpansionEnabled - QS Expand enabled: " + expandEnabled);
     }
 
@@ -1730,9 +1726,9 @@ public class StatusBar extends SystemUI implements DemoMode,
     /**
      * Asks {@link KeyguardUpdateMonitor} to run face auth.
      */
-    public void requestFaceAuth() {
+    public void requestFaceAuth(boolean userInitiatedRequest) {
         if (!mKeyguardStateController.canDismissLockScreen()) {
-            mKeyguardUpdateMonitor.requestFaceAuth();
+            mKeyguardUpdateMonitor.requestFaceAuth(userInitiatedRequest);
         }
     }
 
@@ -2097,13 +2093,10 @@ public class StatusBar extends SystemUI implements DemoMode,
             return true;
         }
 
-        // If we are locked, only animate if remote unlock animations are enabled and we can dismiss
-        // the lock screen without challenging the user. We also don't animate non-activity
-        // launches as they can break the animation.
+        // If we are locked, only animate if remote unlock animations are enabled. We also don't
+        // animate non-activity launches as they can break the animation.
         // TODO(b/184121838): Support non activity launches on the lockscreen.
-        return isActivityIntent
-                && KeyguardService.sEnableRemoteKeyguardAnimation
-                && mKeyguardStateController.canDismissLockScreen();
+        return isActivityIntent && KeyguardService.sEnableRemoteKeyguardGoingAwayAnimation;
     }
 
     @Override
@@ -2113,13 +2106,17 @@ public class StatusBar extends SystemUI implements DemoMode,
 
     @Override
     public void hideKeyguardWithAnimation(IRemoteAnimationRunner runner) {
-        if (!mKeyguardStateController.canDismissLockScreen()) {
-            Log.wtf(TAG,
-                    "Unable to hide keyguard with animation as the keyguard can't be dismissed");
-            return;
-        }
+        // We post to the main thread for 2 reasons:
+        //   1. KeyguardViewMediator is not thread-safe.
+        //   2. To ensure that ViewMediatorCallback#keyguardDonePending is called before
+        //      ViewMediatorCallback#readyForKeyguardDone. The wrong order could occur when doing
+        //      dismissKeyguardThenExecute { hideKeyguardWithAnimation(runner) }.
+        mMainThreadHandler.post(() -> mKeyguardViewMediator.hideWithAnimation(runner));
+    }
 
-        mKeyguardViewMediator.hideWithAnimation(runner);
+    @Override
+    public void setBlursDisabledForAppLaunch(boolean disabled) {
+        mKeyguardViewMediator.setBlursDisabledForAppLaunch(disabled);
     }
 
     public boolean isDeviceInVrMode() {
@@ -2778,9 +2775,14 @@ public class StatusBar extends SystemUI implements DemoMode,
                 + String.valueOf(CameraIntents.getOverrideCameraPackage(mContext)));
     }
 
-    public static void dumpBarTransitions(PrintWriter pw, String var, BarTransitions transitions) {
+    public static void dumpBarTransitions(
+            PrintWriter pw, String var, @Nullable BarTransitions transitions) {
         pw.print("  "); pw.print(var); pw.print(".BarTransitions.mMode=");
-        pw.println(BarTransitions.modeToString(transitions.getMode()));
+        if (transitions != null) {
+            pw.println(BarTransitions.modeToString(transitions.getMode()));
+        } else {
+            pw.println("Unknown");
+        }
     }
 
     public void createAndAddWindows(@Nullable RegisterStatusBarResult result) {
@@ -2803,11 +2805,11 @@ public class StatusBar extends SystemUI implements DemoMode,
         return mDisplayMetrics.density;
     }
 
-    float getDisplayWidth() {
+    public float getDisplayWidth() {
         return mDisplayMetrics.widthPixels;
     }
 
-    float getDisplayHeight() {
+    public float getDisplayHeight() {
         return mDisplayMetrics.heightPixels;
     }
 
@@ -2837,12 +2839,15 @@ public class StatusBar extends SystemUI implements DemoMode,
             @Nullable ActivityLaunchAnimator.Controller animationController) {
         if (onlyProvisioned && !mDeviceProvisionedController.isDeviceProvisioned()) return;
 
-        final boolean afterKeyguardGone = mActivityIntentHelper.wouldLaunchResolverActivity(
-                intent, mLockscreenUserManager.getCurrentUserId());
+        final boolean willLaunchResolverActivity =
+                mActivityIntentHelper.wouldLaunchResolverActivity(intent,
+                        mLockscreenUserManager.getCurrentUserId());
 
+        boolean animate =
+                animationController != null && !willLaunchResolverActivity && shouldAnimateLaunch(
+                        true /* isActivityIntent */);
         ActivityLaunchAnimator.Controller animController =
-                shouldAnimateLaunch(true /* isActivityIntent */) ? wrapAnimationController(
-                    animationController, dismissShade) : null;
+                animate ? wrapAnimationController(animationController, dismissShade) : null;
 
         // If we animate, we will dismiss the shade only once the animation is done. This is taken
         // care of by the StatusBarLaunchAnimationController.
@@ -2856,7 +2861,7 @@ public class StatusBar extends SystemUI implements DemoMode,
             int[] result = new int[]{ActivityManager.START_CANCELED};
 
             mActivityLaunchAnimator.startIntentWithAnimation(animController,
-                    true /* animate */, intent.getPackage(), (adapter) -> {
+                    animate, intent.getPackage(), (adapter) -> {
                         ActivityOptions options = new ActivityOptions(
                                 getActivityOptions(mDisplayId, adapter));
                         options.setDisallowEnterPictureInPictureWhileLaunching(
@@ -2906,16 +2911,12 @@ public class StatusBar extends SystemUI implements DemoMode,
             }
         };
         executeRunnableDismissingKeyguard(runnable, cancelRunnable, dismissShadeDirectly,
-                afterKeyguardGone, true /* deferred */);
+                willLaunchResolverActivity, true /* deferred */, animate);
     }
 
     @Nullable
     private ActivityLaunchAnimator.Controller wrapAnimationController(
-            @Nullable ActivityLaunchAnimator.Controller animationController, boolean dismissShade) {
-        if (animationController == null) {
-            return null;
-        }
-
+            ActivityLaunchAnimator.Controller animationController, boolean dismissShade) {
         View rootView = animationController.getLaunchContainer().getRootView();
         if (rootView == mSuperStatusBarViewFactory.getStatusBarWindowView()) {
             // We are animating a view in the status bar. We have to make sure that the status bar
@@ -2958,34 +2959,56 @@ public class StatusBar extends SystemUI implements DemoMode,
             final boolean dismissShade,
             final boolean afterKeyguardGone,
             final boolean deferred) {
-        dismissKeyguardThenExecute(() -> {
-            if (runnable != null) {
-                if (mStatusBarKeyguardViewManager.isShowing()
-                        && mStatusBarKeyguardViewManager.isOccluded()) {
-                    mStatusBarKeyguardViewManager.addAfterKeyguardGoneRunnable(runnable);
-                } else {
-                    AsyncTask.execute(runnable);
-                }
-            }
-            if (dismissShade) {
-                if (mExpandedVisible && !mBouncerShowing) {
-                    mShadeController.animateCollapsePanels(CommandQueue.FLAG_EXCLUDE_RECENTS_PANEL,
-                            true /* force */, true /* delayed*/);
-                } else {
+        executeRunnableDismissingKeyguard(runnable, cancelAction, dismissShade, afterKeyguardGone,
+                deferred, false /* willAnimateOnKeyguard */);
+    }
 
-                    // Do it after DismissAction has been processed to conserve the needed ordering.
-                    mHandler.post(mShadeController::runPostCollapseRunnables);
+    public void executeRunnableDismissingKeyguard(final Runnable runnable,
+            final Runnable cancelAction,
+            final boolean dismissShade,
+            final boolean afterKeyguardGone,
+            final boolean deferred,
+            final boolean willAnimateOnKeyguard) {
+        OnDismissAction onDismissAction = new OnDismissAction() {
+            @Override
+            public boolean onDismiss() {
+                if (runnable != null) {
+                    if (mStatusBarKeyguardViewManager.isShowing()
+                            && mStatusBarKeyguardViewManager.isOccluded()) {
+                        mStatusBarKeyguardViewManager.addAfterKeyguardGoneRunnable(runnable);
+                    } else {
+                        AsyncTask.execute(runnable);
+                    }
                 }
-            } else if (isInLaunchTransition()
-                    && mNotificationPanelViewController.isLaunchTransitionFinished()) {
+                if (dismissShade) {
+                    if (mExpandedVisible && !mBouncerShowing) {
+                        mShadeController.animateCollapsePanels(
+                                CommandQueue.FLAG_EXCLUDE_RECENTS_PANEL,
+                                true /* force */, true /* delayed*/);
+                    } else {
 
-                // We are not dismissing the shade, but the launch transition is already finished,
-                // so nobody will call readyForKeyguardDone anymore. Post it such that
-                // keyguardDonePending gets called first.
-                mHandler.post(mStatusBarKeyguardViewManager::readyForKeyguardDone);
+                        // Do it after DismissAction has been processed to conserve the needed
+                        // ordering.
+                        mHandler.post(mShadeController::runPostCollapseRunnables);
+                    }
+                } else if (StatusBar.this.isInLaunchTransition()
+                        && mNotificationPanelViewController.isLaunchTransitionFinished()) {
+
+                    // We are not dismissing the shade, but the launch transition is already
+                    // finished,
+                    // so nobody will call readyForKeyguardDone anymore. Post it such that
+                    // keyguardDonePending gets called first.
+                    mHandler.post(mStatusBarKeyguardViewManager::readyForKeyguardDone);
+                }
+                return deferred;
             }
-            return deferred;
-        }, cancelAction, afterKeyguardGone);
+
+            @Override
+            public boolean willRunAnimationOnKeyguard() {
+                return willAnimateOnKeyguard;
+            }
+        };
+        dismissKeyguardThenExecute(onDismissAction, cancelAction, afterKeyguardGone);
     }
 
     private final BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
@@ -3407,6 +3430,10 @@ public class StatusBar extends SystemUI implements DemoMode,
     }
 
     boolean updateIsKeyguard() {
+        return updateIsKeyguard(false /* force */);
+    }
+
+    boolean updateIsKeyguard(boolean force) {
         boolean wakeAndUnlocking = mBiometricUnlockController.getMode()
                 == BiometricUnlockController.MODE_WAKE_AND_UNLOCK;
 
@@ -3430,7 +3457,7 @@ public class StatusBar extends SystemUI implements DemoMode,
                 showKeyguardImpl();
             }
         } else {
-            return hideKeyguardImpl();
+            return hideKeyguardImpl(force);
         }
         return false;
     }
@@ -3513,9 +3540,6 @@ public class StatusBar extends SystemUI implements DemoMode,
         mNotificationPanelViewController.fadeOut(0, FADE_KEYGUARD_DURATION_PULSING,
                 ()-> {
                 hideKeyguard();
-                if (shouldShowCircleReveal()) {
-                    startCircleReveal();
-                }
                 mStatusBarKeyguardViewManager.onKeyguardFadedAway();
             }).start();
     }
@@ -3559,11 +3583,11 @@ public class StatusBar extends SystemUI implements DemoMode,
     /**
      * @return true if we would like to stay in the shade, false if it should go away entirely
      */
-    public boolean hideKeyguardImpl() {
+    public boolean hideKeyguardImpl(boolean force) {
         mIsKeyguard = false;
         Trace.beginSection("StatusBar#hideKeyguard");
         boolean staying = mStatusBarStateController.leaveOpenOnKeyguardHide();
-        if (!(mStatusBarStateController.setState(StatusBarState.SHADE))) {
+        if (!(mStatusBarStateController.setState(StatusBarState.SHADE, force))) {
             //TODO: StatusBarStateController should probably know about hiding the keyguard and
             // notify listeners.
 
@@ -3855,7 +3879,7 @@ public class StatusBar extends SystemUI implements DemoMode,
     @Override
     public void onDozeAmountChanged(float linear, float eased) {
         if (mFeatureFlags.useNewLockscreenAnimations()
-                && !mCircleRevealAnimator.isRunning()) {
+                && !(mLightRevealScrim.getRevealEffect() instanceof CircleReveal)) {
             mLightRevealScrim.setRevealAmount(1f - linear);
         }
     }
@@ -3873,17 +3897,6 @@ public class StatusBar extends SystemUI implements DemoMode,
         updateQsExpansionEnabled();
         mKeyguardViewMediator.setDozing(mDozing);
 
-        if (!isDozing && shouldShowCircleReveal()) {
-            startCircleReveal();
-        } else if ((isDozing && mWakefulnessLifecycle.getLastSleepReason()
-                == PowerManager.GO_TO_SLEEP_REASON_POWER_BUTTON)
-                || (!isDozing && mWakefulnessLifecycle.getLastWakeReason()
-                == PowerManager.WAKE_REASON_POWER_BUTTON)) {
-            mLightRevealScrim.setRevealEffect(mPowerButtonReveal);
-        } else if (!mCircleRevealAnimator.isRunning()) {
-            mLightRevealScrim.setRevealEffect(LiftReveal.INSTANCE);
-        }
-
         mNotificationsController.requestNotificationUpdate("onDozingChanged");
         updateDozingState();
         mDozeServiceHost.updateDozing();
@@ -3893,35 +3906,28 @@ public class StatusBar extends SystemUI implements DemoMode,
     }
 
     /**
-     * Update the parameters for the dozing circle reveal that animates when the user authenticates
-     * from AOD using the fingerprint sensor.
+     * Updates the light reveal effect to reflect the reason we're waking or sleeping (for example,
+     * from the power button).
+     * @param wakingUp Whether we're updating because we're waking up (true) or going to sleep
+     *                 (false).
      */
-    public void updateCircleReveal() {
-        final PointF fpLocation = mAuthRippleController.getFingerprintSensorLocation();
-        if (fpLocation != null) {
-            mCircleReveal =
-                    new CircleReveal(
-                            fpLocation.x,
-                            fpLocation.y,
-                            0,
-                            Math.max(Math.max(fpLocation.x, getDisplayWidth() - fpLocation.x),
-                                    Math.max(fpLocation.y, getDisplayHeight() - fpLocation.y)));
+    private void updateRevealEffect(boolean wakingUp) {
+        if (mLightRevealScrim == null) {
+            return;
+        }
+
+        if (wakingUp && mWakefulnessLifecycle.getLastWakeReason()
+                == PowerManager.WAKE_REASON_POWER_BUTTON
+                || !wakingUp && mWakefulnessLifecycle.getLastSleepReason()
+                == PowerManager.GO_TO_SLEEP_REASON_POWER_BUTTON) {
+            mLightRevealScrim.setRevealEffect(mPowerButtonReveal);
+        } else if (!(mLightRevealScrim.getRevealEffect() instanceof CircleReveal)) {
+            mLightRevealScrim.setRevealEffect(LiftReveal.INSTANCE);
         }
     }
 
-    private void startCircleReveal() {
-        mLightRevealScrim.setRevealEffect(mCircleReveal);
-        mCircleRevealAnimator.cancel();
-        mCircleRevealAnimator.addUpdateListener(animation ->
-                mLightRevealScrim.setRevealAmount(
-                        (float) mCircleRevealAnimator.getAnimatedValue()));
-        mCircleRevealAnimator.setDuration(900);
-        mCircleRevealAnimator.start();
-    }
-
-    private boolean shouldShowCircleReveal() {
-        return mCircleReveal != null && !mCircleRevealAnimator.isRunning()
-                && mBiometricUnlockController.getBiometricType() == FINGERPRINT;
+    public LightRevealScrim getLightRevealScrim() {
+        return mLightRevealScrim;
     }
 
     private void updateKeyguardState() {
@@ -4052,6 +4058,7 @@ public class StatusBar extends SystemUI implements DemoMode,
         public void onStartedGoingToSleep() {
             String tag = "StatusBar#onStartedGoingToSleep";
             DejankUtils.startDetectingBlockingIpcs(tag);
+            updateRevealEffect(false /* wakingUp */);
             updateNotificationPanelTouchState();
             notifyHeadsUpGoingToSleep();
             dismissVolumeDialog();
@@ -4061,7 +4068,7 @@ public class StatusBar extends SystemUI implements DemoMode,
 
             // The screen off animation uses our LightRevealScrim - we need to be expanded for it to
             // be visible.
-            if (mUnlockedScreenOffAnimationController.shouldPlayScreenOffAnimation()) {
+            if (mDozeParameters.shouldControlUnlockedScreenOff()) {
                 makeExpandedVisible(true);
             }
 
@@ -4083,6 +4090,7 @@ public class StatusBar extends SystemUI implements DemoMode,
             // This is intentionally below the stopDozing call above, since it avoids that we're
             // unnecessarily animating the wakeUp transition. Animations should only be enabled
             // once we fully woke up.
+            updateRevealEffect(true /* wakingUp */);
             updateNotificationPanelTouchState();
             mPulseExpansionHandler.onStartedWakingUp();
 
@@ -4453,6 +4461,7 @@ public class StatusBar extends SystemUI implements DemoMode,
             mScrimController.transitionTo(ScrimState.UNLOCKED, mUnlockScrimCallback);
         }
         updateLightRevealScrimVisibility();
+
         Trace.endSection();
     }
 
@@ -4612,27 +4621,37 @@ public class StatusBar extends SystemUI implements DemoMode,
      *
      * @param action The action to execute after dismissing the keyguard.
      * @param collapsePanel Whether we should collapse the panel after dismissing the keyguard.
+     * @param willAnimateOnKeyguard Whether {@param action} will run an animation on the keyguard if
+     *                              we are locked.
      */
     private void executeActionDismissingKeyguard(Runnable action, boolean afterKeyguardGone,
-            boolean collapsePanel) {
+            boolean collapsePanel, boolean willAnimateOnKeyguard) {
         if (!mDeviceProvisionedController.isDeviceProvisioned()) return;
 
-        dismissKeyguardThenExecute(() -> {
-            new Thread(() -> {
-                try {
-                    // The intent we are sending is for the application, which
-                    // won't have permission to immediately start an activity after
-                    // the user switches to home.  We know it is safe to do at this
-                    // point, so make sure new activity switches are now allowed.
-                    ActivityManager.getService().resumeAppSwitches();
-                } catch (RemoteException e) {
-                }
-                action.run();
-            }).start();
+        OnDismissAction onDismissAction = new OnDismissAction() {
+            @Override
+            public boolean onDismiss() {
+                new Thread(() -> {
+                    try {
+                        // The intent we are sending is for the application, which
+                        // won't have permission to immediately start an activity after
+                        // the user switches to home.  We know it is safe to do at this
+                        // point, so make sure new activity switches are now allowed.
+                        ActivityManager.getService().resumeAppSwitches();
+                    } catch (RemoteException e) {
+                    }
+                    action.run();
+                }).start();
 
-            boolean deferred = collapsePanel ? mShadeController.collapsePanel() : false;
-            return deferred;
-        }, afterKeyguardGone);
+                return collapsePanel ? mShadeController.collapsePanel() : willAnimateOnKeyguard;
+            }
+
+            @Override
+            public boolean willRunAnimationOnKeyguard() {
+                return willAnimateOnKeyguard;
+            }
+        };
+        dismissKeyguardThenExecute(onDismissAction, afterKeyguardGone);
     }
 
     @Override
@@ -4664,12 +4683,18 @@ public class StatusBar extends SystemUI implements DemoMode,
     public void startPendingIntentDismissingKeyguard(
             final PendingIntent intent, @Nullable final Runnable intentSentUiThreadCallback,
             @Nullable ActivityLaunchAnimator.Controller animationController) {
-        final boolean afterKeyguardGone = intent.isActivity()
+        final boolean willLaunchResolverActivity = intent.isActivity()
                 && mActivityIntentHelper.wouldLaunchResolverActivity(intent.getIntent(),
                 mLockscreenUserManager.getCurrentUserId());
 
-        boolean collapse = animationController == null;
-        boolean animate = shouldAnimateLaunch(intent.isActivity());
+        boolean animate = !willLaunchResolverActivity
+                && animationController != null
+                && shouldAnimateLaunch(intent.isActivity());
+
+        // If we animate, don't collapse the shade and defer the keyguard dismiss (in case we run
+        // the animation on the keyguard). The animation will take care of (instantly) collapsing
+        // the shade and hiding the keyguard once it is done.
+        boolean collapse = !animate;
         executeActionDismissingKeyguard(() -> {
             try {
                 // We wrap animationCallback with a StatusBarLaunchAnimatorController so that the
@@ -4698,7 +4723,7 @@ public class StatusBar extends SystemUI implements DemoMode,
             if (intentSentUiThreadCallback != null) {
                 postOnUiThread(intentSentUiThreadCallback);
             }
-        }, afterKeyguardGone, collapse);
+        }, willLaunchResolverActivity, collapse, animate);
     }
 
     private void postOnUiThread(Runnable runnable) {
@@ -4887,15 +4912,10 @@ public class StatusBar extends SystemUI implements DemoMode,
             return;
         }
 
-        if (mDozeServiceHost.isPulsing()) {
-            mLightRevealScrim.setVisibility(View.GONE);
-            return;
-        }
-
+        mLightRevealScrim.setAlpha(mScrimController.getState().getMaxLightRevealScrimAlpha());
         if (mFeatureFlags.useNewLockscreenAnimations()
                 && (mDozeParameters.getAlwaysOn() || mDozeParameters.isQuickPickupEnabled())) {
             mLightRevealScrim.setVisibility(View.VISIBLE);
-            mLightRevealScrim.setRevealEffect(LiftReveal.INSTANCE);
         } else {
             mLightRevealScrim.setVisibility(View.GONE);
         }

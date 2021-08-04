@@ -33,18 +33,17 @@ import android.hardware.face.FaceAuthenticationFrame;
 import android.hardware.face.FaceManager;
 import android.os.IBinder;
 import android.os.RemoteException;
-import android.os.VibrationEffect;
 import android.provider.Settings;
 import android.util.Slog;
 
 import com.android.internal.R;
 import com.android.server.biometrics.Utils;
 import com.android.server.biometrics.sensors.AuthenticationClient;
+import com.android.server.biometrics.sensors.BiometricNotificationUtils;
 import com.android.server.biometrics.sensors.ClientMonitorCallbackConverter;
 import com.android.server.biometrics.sensors.LockoutCache;
 import com.android.server.biometrics.sensors.LockoutConsumer;
 import com.android.server.biometrics.sensors.LockoutTracker;
-import com.android.server.biometrics.sensors.face.ReEnrollNotificationUtils;
 import com.android.server.biometrics.sensors.face.UsageStats;
 
 import java.util.ArrayList;
@@ -97,6 +96,12 @@ class FaceAuthenticationClient extends AuthenticationClient<ISession> implements
         mContentResolver = context.getContentResolver();
         mCustomHaptics = Settings.Global.getInt(mContentResolver,
                 "face_custom_success_error", 0) == 1;
+    }
+
+    @NonNull
+    @Override
+    protected Callback wrapCallbackForStart(@NonNull Callback callback) {
+        return new CompositeCallback(createALSCallback(), callback);
     }
 
     @Override
@@ -176,7 +181,7 @@ class FaceAuthenticationClient extends AuthenticationClient<ISession> implements
                 }
                 break;
             case BiometricConstants.BIOMETRIC_ERROR_RE_ENROLL:
-                ReEnrollNotificationUtils.showReEnrollmentNotification(getContext());
+                BiometricNotificationUtils.showReEnrollmentNotification(getContext());
                 break;
             default:
                 break;
@@ -229,7 +234,8 @@ class FaceAuthenticationClient extends AuthenticationClient<ISession> implements
         }
     }
 
-    @Override public void onLockoutTimed(long durationMillis) {
+    @Override
+    public void onLockoutTimed(long durationMillis) {
         mLockoutCache.setLockoutModeForUser(getTargetUserId(), LockoutTracker.LOCKOUT_TIMED);
         // Lockout metrics are logged as an error code.
         final int error = BiometricFaceConstants.FACE_ERROR_LOCKOUT;
@@ -242,7 +248,8 @@ class FaceAuthenticationClient extends AuthenticationClient<ISession> implements
         }
     }
 
-    @Override public void onLockoutPermanent() {
+    @Override
+    public void onLockoutPermanent() {
         mLockoutCache.setLockoutModeForUser(getTargetUserId(), LockoutTracker.LOCKOUT_PERMANENT);
         // Lockout metrics are logged as an error code.
         final int error = BiometricFaceConstants.FACE_ERROR_LOCKOUT_PERMANENT;
@@ -256,22 +263,16 @@ class FaceAuthenticationClient extends AuthenticationClient<ISession> implements
     }
 
     @Override
-    protected @NonNull VibrationEffect getSuccessVibrationEffect() {
-        if (!mCustomHaptics) {
-            return super.getSuccessVibrationEffect();
-        }
-
-        return getVibration(Settings.Global.getString(mContentResolver,
-                "face_success_type"), super.getSuccessVibrationEffect());
+    protected boolean successHapticsEnabled() {
+        return mCustomHaptics
+            ? Settings.Global.getInt(mContentResolver, "face_success_enabled", 1) == 0
+            : super.successHapticsEnabled();
     }
 
     @Override
-    protected @NonNull VibrationEffect getErrorVibrationEffect() {
-        if (!mCustomHaptics) {
-            return super.getErrorVibrationEffect();
-        }
-
-        return getVibration(Settings.Global.getString(mContentResolver,
-                "face_error_type"), super.getErrorVibrationEffect());
+    protected boolean errorHapticsEnabled() {
+        return mCustomHaptics
+            ? Settings.Global.getInt(mContentResolver, "face_error_enabled", 1) == 0
+            : super.errorHapticsEnabled();
     }
 }

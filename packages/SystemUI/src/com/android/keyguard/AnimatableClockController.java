@@ -94,7 +94,9 @@ public class AnimatableClockController extends ViewController<AnimatableClockVie
         @Override
         public void onBatteryLevelChanged(int level, boolean pluggedIn, boolean charging) {
             if (mKeyguardShowing && !mIsCharging && charging) {
-                mView.animateCharge(mIsDozing);
+                mView.animateCharge(() -> {
+                    return mStatusBarStateController.isDozing();
+                });
             }
             mIsCharging = charging;
         }
@@ -127,8 +129,10 @@ public class AnimatableClockController extends ViewController<AnimatableClockVie
         @Override
         public void onBiometricAuthenticated(int userId, BiometricSourceType biometricSourceType,
                 boolean isStrongBiometric) {
+            // Strong auth will force the bouncer regardless of a successful face auth
             if (biometricSourceType == BiometricSourceType.FACE
-                    && mBypassController.canBypass()) {
+                    && mBypassController.canBypass()
+                    && !mKeyguardUpdateMonitor.userNeedsStrongAuth()) {
                 mView.animateDisappear();
             }
         }
@@ -208,6 +212,7 @@ public class AnimatableClockController extends ViewController<AnimatableClockVie
             } else {
                 mView.setLineSpacingScale(mDefaultLineSpacing);
             }
+            mView.refreshFormat();
         }
     }
 

@@ -72,10 +72,7 @@ public class AmbientState {
     private boolean mUnlockHintRunning;
     private boolean mQsCustomizerShowing;
     private int mIntrinsicPadding;
-    private int mExpandAnimationTopChange;
-    private ExpandableNotificationRow mExpandingNotification;
     private float mHideAmount;
-    private float mNotificationScrimTop;
     private boolean mAppearing;
     private float mPulseHeight = MAX_PULSE_HEIGHT;
     private float mDozeAmount = 0.0f;
@@ -83,7 +80,7 @@ public class AmbientState {
     private ExpandableNotificationRow mTrackedHeadsUpRow;
     private float mAppearFraction;
     private boolean mIsShadeOpening;
-    private float mSectionPadding;
+    private float mOverExpansion;
 
     /** Distance of top of notifications panel from top of screen. */
     private float mStackY = 0;
@@ -182,12 +179,12 @@ public class AmbientState {
         return mIsShadeOpening;
     }
 
-    void setSectionPadding(float padding) {
-        mSectionPadding = padding;
+    void setOverExpansion(float overExpansion) {
+        mOverExpansion = overExpansion;
     }
 
-    float getSectionPadding() {
-        return mSectionPadding;
+    float getOverExpansion() {
+        return mOverExpansion;
     }
 
     private static int getZDistanceBetweenElements(Context context) {
@@ -225,8 +222,14 @@ public class AmbientState {
         return mScrollY;
     }
 
+    /**
+     * Set the new Scroll Y position.
+     */
     public void setScrollY(int scrollY) {
-        this.mScrollY = scrollY;
+        // Because we're dealing with an overscroller, scrollY could sometimes become smaller than
+        // 0. However this is only for internal purposes and the scroll position when read
+        // should never be smaller than 0, otherwise it can lead to flickers.
+        this.mScrollY = Math.max(scrollY, 0);
     }
 
     /**
@@ -254,20 +257,6 @@ public class AmbientState {
     /** Returns the hide ratio of the status bar */
     public float getHideAmount() {
         return mHideAmount;
-    }
-
-    /**
-     * Set y position of top of notifications background scrim, relative to top of screen.
-     */
-    public void setNotificationScrimTop(float notificationScrimTop) {
-        mNotificationScrimTop = notificationScrimTop;
-    }
-
-    /**
-     * @return Y position of top of notifications background scrim, relative to top of screen.
-     */
-    public float getNotificationScrimTop() {
-        return mNotificationScrimTop;
     }
 
     public void setHideSensitive(boolean hideSensitive) {
@@ -525,22 +514,6 @@ public class AmbientState {
      */
     public boolean isDozingAndNotPulsing(ExpandableNotificationRow row) {
         return isDozing() && !isPulsing(row.getEntry());
-    }
-
-    public void setExpandAnimationTopChange(int expandAnimationTopChange) {
-        mExpandAnimationTopChange = expandAnimationTopChange;
-    }
-
-    public void setExpandingNotification(ExpandableNotificationRow row) {
-        mExpandingNotification = row;
-    }
-
-    public ExpandableNotificationRow getExpandingNotification() {
-        return mExpandingNotification;
-    }
-
-    public int getExpandAnimationTopChange() {
-        return mExpandAnimationTopChange;
     }
 
     /**

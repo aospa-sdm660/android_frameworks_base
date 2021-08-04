@@ -28,16 +28,15 @@ import android.hardware.biometrics.face.V1_0.IBiometricsFace;
 import android.hardware.face.FaceManager;
 import android.os.IBinder;
 import android.os.RemoteException;
-import android.os.VibrationEffect;
 import android.provider.Settings;
 import android.util.Slog;
 
 import com.android.internal.R;
 import com.android.server.biometrics.Utils;
 import com.android.server.biometrics.sensors.AuthenticationClient;
+import com.android.server.biometrics.sensors.BiometricNotificationUtils;
 import com.android.server.biometrics.sensors.ClientMonitorCallbackConverter;
 import com.android.server.biometrics.sensors.LockoutTracker;
-import com.android.server.biometrics.sensors.face.ReEnrollNotificationUtils;
 import com.android.server.biometrics.sensors.face.UsageStats;
 
 import java.util.ArrayList;
@@ -86,6 +85,12 @@ class FaceAuthenticationClient extends AuthenticationClient<IBiometricsFace> {
         mContentResolver = context.getContentResolver();
         mCustomHaptics = Settings.Global.getInt(mContentResolver,
                 "face_custom_success_error", 0) == 1;
+    }
+
+    @NonNull
+    @Override
+    protected Callback wrapCallbackForStart(@NonNull Callback callback) {
+        return new CompositeCallback(createALSCallback(), callback);
     }
 
     @Override
@@ -186,11 +191,10 @@ class FaceAuthenticationClient extends AuthenticationClient<IBiometricsFace> {
 
     @Override
     public void onAcquired(int acquireInfo, int vendorCode) {
-
         mLastAcquire = acquireInfo;
 
         if (acquireInfo == FaceManager.FACE_ACQUIRED_RECALIBRATE) {
-            ReEnrollNotificationUtils.showReEnrollmentNotification(getContext());
+            BiometricNotificationUtils.showReEnrollmentNotification(getContext());
         }
 
         final boolean shouldSend = shouldSend(acquireInfo, vendorCode);
@@ -198,22 +202,16 @@ class FaceAuthenticationClient extends AuthenticationClient<IBiometricsFace> {
     }
 
     @Override
-    protected @NonNull VibrationEffect getSuccessVibrationEffect() {
-        if (!mCustomHaptics) {
-            return super.getSuccessVibrationEffect();
-        }
-
-        return getVibration(Settings.Global.getString(mContentResolver,
-                "face_success_type"), super.getSuccessVibrationEffect());
+    protected boolean successHapticsEnabled() {
+        return mCustomHaptics
+            ? Settings.Global.getInt(mContentResolver, "face_success_enabled", 1) == 0
+            : super.successHapticsEnabled();
     }
 
     @Override
-    protected @NonNull VibrationEffect getErrorVibrationEffect() {
-        if (!mCustomHaptics) {
-            return super.getErrorVibrationEffect();
-        }
-
-        return getVibration(Settings.Global.getString(mContentResolver,
-                "face_error_type"), super.getErrorVibrationEffect());
+    protected boolean errorHapticsEnabled() {
+        return mCustomHaptics
+            ? Settings.Global.getInt(mContentResolver, "face_error_enabled", 1) == 0
+            : super.errorHapticsEnabled();
     }
 }

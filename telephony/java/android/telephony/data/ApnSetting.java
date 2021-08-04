@@ -1551,6 +1551,20 @@ public class ApnSetting implements Parcelable {
     }
 
     /**
+     * Converts the APN type bitmask to an array of all APN types
+     * @param apnTypeBitmask bitmask of APN types.
+     * @return int array of APN types
+     * @hide
+     */
+    @NonNull
+    public static int[] getApnTypesFromBitmask(int apnTypeBitmask) {
+        return APN_TYPE_INT_MAP.keySet().stream()
+                .filter(type -> ((apnTypeBitmask & type) == type))
+                .mapToInt(Integer::intValue)
+                .toArray();
+    }
+
+    /**
      * Converts the integer representation of APN type to its string representation.
      *
      * @param apnType APN type as an integer
@@ -2214,7 +2228,7 @@ public class ApnSetting implements Parcelable {
         /**
          * Builds {@link ApnSetting} from this builder.
          *
-         * @return {@code null} if {@link #setEntryName(String)}
+         * @return {@code null} if {@link #setApnName(String)} or {@link #setEntryName(String)}
          * is empty, or {@link #setApnTypeBitmask(int)} doesn't contain a valid bit,
          * {@link ApnSetting} built from this builder otherwise.
          */
@@ -2222,7 +2236,7 @@ public class ApnSetting implements Parcelable {
             if ((mApnTypeBitmask & (TYPE_DEFAULT | TYPE_MMS | TYPE_SUPL | TYPE_DUN | TYPE_HIPRI
                     | TYPE_FOTA | TYPE_IMS | TYPE_CBS | TYPE_IA | TYPE_EMERGENCY | TYPE_MCX
                     | TYPE_XCAP | TYPE_VSIM | TYPE_BIP | TYPE_ENTERPRISE)) == 0
-                || TextUtils.isEmpty(mEntryName)) {
+                || TextUtils.isEmpty(mApnName) || TextUtils.isEmpty(mEntryName)) {
                 return null;
             }
             return new ApnSetting(this);

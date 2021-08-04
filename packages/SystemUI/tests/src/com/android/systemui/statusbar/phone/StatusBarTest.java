@@ -755,7 +755,7 @@ public class StatusBarTest extends SysuiTestCase {
         when(mCommandQueue.panelsEnabled()).thenReturn(false);
         mStatusBar.disable(DEFAULT_DISPLAY, StatusBarManager.DISABLE_NONE,
                 StatusBarManager.DISABLE2_NOTIFICATION_SHADE, false);
-        verify(mNotificationPanelViewController).setQsExpansionEnabled(false);
+        verify(mNotificationPanelViewController).setQsExpansionEnabledPolicy(false);
         mStatusBar.animateExpandNotificationsPanel();
         verify(mNotificationPanelViewController, never()).expand(anyBoolean());
         mStatusBar.animateExpandSettingsPanel(null);
@@ -764,7 +764,7 @@ public class StatusBarTest extends SysuiTestCase {
         when(mCommandQueue.panelsEnabled()).thenReturn(true);
         mStatusBar.disable(DEFAULT_DISPLAY, StatusBarManager.DISABLE_NONE,
                 StatusBarManager.DISABLE2_NONE, false);
-        verify(mNotificationPanelViewController).setQsExpansionEnabled(true);
+        verify(mNotificationPanelViewController).setQsExpansionEnabledPolicy(true);
         mStatusBar.animateExpandNotificationsPanel();
         verify(mNotificationPanelViewController).expandWithoutQs();
         mStatusBar.animateExpandSettingsPanel(null);
@@ -774,6 +774,12 @@ public class StatusBarTest extends SysuiTestCase {
     @Test
     public void testDump_DoesNotCrash() {
         mStatusBar.dump(null, new PrintWriter(new ByteArrayOutputStream()), null);
+    }
+
+    @Test
+    public void testDumpBarTransitions_DoesNotCrash() {
+        StatusBar.dumpBarTransitions(
+                new PrintWriter(new ByteArrayOutputStream()), "var", /* transitions= */ null);
     }
 
     @Test
@@ -843,12 +849,14 @@ public class StatusBarTest extends SysuiTestCase {
 
         // By default, showKeyguardImpl sets state to KEYGUARD.
         mStatusBar.showKeyguardImpl();
-        verify(mStatusBarStateController).setState(eq(StatusBarState.KEYGUARD));
+        verify(mStatusBarStateController).setState(
+                eq(StatusBarState.KEYGUARD), eq(false) /* force */);
 
         // If useFullscreenUserSwitcher is true, state is set to FULLSCREEN_USER_SWITCHER.
         when(mUserSwitcherController.useFullscreenUserSwitcher()).thenReturn(true);
         mStatusBar.showKeyguardImpl();
-        verify(mStatusBarStateController).setState(eq(StatusBarState.FULLSCREEN_USER_SWITCHER));
+        verify(mStatusBarStateController).setState(
+                eq(StatusBarState.FULLSCREEN_USER_SWITCHER), eq(false) /* force */);
     }
 
     @Test

@@ -98,7 +98,7 @@ class VoiceInteractionManagerServiceImpl implements VoiceInteractionSessionConne
     final ComponentName mHotwordDetectionComponentName;
     boolean mBound = false;
     IVoiceInteractionService mService;
-    HotwordDetectionConnection mHotwordDetectionConnection;
+    volatile HotwordDetectionConnection mHotwordDetectionConnection;
 
     VoiceInteractionSessionConnection mActiveSession;
     int mDisabledShowContext;
@@ -447,8 +447,8 @@ class VoiceInteractionManagerServiceImpl implements VoiceInteractionSessionConne
 
         if (mHotwordDetectionConnection == null) {
             mHotwordDetectionConnection = new HotwordDetectionConnection(mServiceStub, mContext,
-                    mHotwordDetectionComponentName, mUser, /* bindInstantServiceAllowed= */ false,
-                    options, sharedMemory, callback);
+                    mInfo.getServiceInfo().applicationInfo.uid, mHotwordDetectionComponentName,
+                    mUser, /* bindInstantServiceAllowed= */ false, options, sharedMemory, callback);
         } else {
             mHotwordDetectionConnection.updateStateLocked(options, sharedMemory);
         }
@@ -560,6 +560,14 @@ class VoiceInteractionManagerServiceImpl implements VoiceInteractionSessionConne
     boolean isIsolatedProcessLocked(@NonNull ServiceInfo serviceInfo) {
         return (serviceInfo.flags & ServiceInfo.FLAG_ISOLATED_PROCESS) != 0
                 && (serviceInfo.flags & ServiceInfo.FLAG_EXTERNAL_SERVICE) == 0;
+    }
+
+    void forceRestartHotwordDetector() {
+        if (mHotwordDetectionConnection == null) {
+            Slog.w(TAG, "Failed to force-restart hotword detection: no hotword detection active");
+            return;
+        }
+        mHotwordDetectionConnection.forceRestart();
     }
 
     public void dumpLocked(FileDescriptor fd, PrintWriter pw, String[] args) {

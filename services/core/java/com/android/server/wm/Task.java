@@ -984,10 +984,7 @@ class Task extends WindowContainer<WindowContainer> {
     }
 
     void removeIfPossible(String reason) {
-        final boolean isRootTask = isRootTask();
-        if (!isRootTask) {
-            mAtmService.getLockTaskController().clearLockedTask(this);
-        }
+        mAtmService.getLockTaskController().clearLockedTask(this);
         if (shouldDeferRemoval()) {
             if (DEBUG_ROOT_TASK) Slog.i(TAG,
                     "removeTask:" + reason + " deferring removing taskId=" + mTaskId);
@@ -1477,12 +1474,6 @@ class Task extends WindowContainer<WindowContainer> {
         adjustBoundsForDisplayChangeIfNeeded(getDisplayContent());
 
         mRootWindowContainer.updateUIDsPresentOnDisplay();
-
-        // Resume next focusable root task after reparenting to another display if we aren't
-        // removing the prevous display.
-        if (oldDisplay != null && oldDisplay.isRemoving()) {
-            postReparent();
-        }
     }
 
     void cleanUpActivityReferences(ActivityRecord r) {
@@ -4127,9 +4118,6 @@ class Task extends WindowContainer<WindowContainer> {
         info.topActivityInfo = mReuseActivitiesReport.top != null
                 ? mReuseActivitiesReport.top.info
                 : null;
-        info.topActivityToken = mReuseActivitiesReport.top != null
-                ? mReuseActivitiesReport.top.appToken
-                : null;
         // Whether the direct top activity is in size compat mode on foreground.
         info.topActivityInSizeCompat = mReuseActivitiesReport.top != null
                 && mReuseActivitiesReport.top.getOrganizedTask() == this
@@ -5475,8 +5463,7 @@ class Task extends WindowContainer<WindowContainer> {
         mRootWindowContainer.resumeFocusedTasksTopActivities();
     }
 
-    /** Resume next focusable root task after reparenting to another display. */
-    void postReparent() {
+    void resumeNextFocusAfterReparent() {
         adjustFocusToNextFocusableTask("reparent", true /* allowFocusSelf */,
                 true /* moveDisplayToTop */);
         mRootWindowContainer.resumeFocusedTasksTopActivities();
@@ -6740,24 +6727,26 @@ class Task extends WindowContainer<WindowContainer> {
                     }
                 }
 
-                // TODO(185200798): Persist theme name instead of theme if
-                int splashScreenThemeResId = options != null
-                        ? options.getSplashScreenThemeResId() : 0;
-
-                // User can override the splashscreen theme. The theme name is used to persist
-                // the setting, so if no theme is set in the ActivityOptions, we check if has
-                // been persisted here.
-                if (splashScreenThemeResId == 0) {
+                // Find the splash screen theme. User can override the persisted theme by
+                // ActivityOptions.
+                String splashScreenThemeResName = options != null
+                        ? options.getSplashScreenThemeResName() : null;
+                if (splashScreenThemeResName == null || splashScreenThemeResName.isEmpty()) {
                     try {
-                        String themeName = mAtmService.getPackageManager()
+                        splashScreenThemeResName = mAtmService.getPackageManager()
                                 .getSplashScreenTheme(r.packageName, r.mUserId);
-                        if (themeName != null) {
-                            Context packageContext = mAtmService.mContext
-                                    .createPackageContext(r.packageName, 0);
-                            splashScreenThemeResId = packageContext.getResources()
-                                    .getIdentifier(themeName, null, null);
-                        }
-                    } catch (RemoteException | PackageManager.NameNotFoundException
+                    } catch (RemoteException ignore) {
+                        // Just use the default theme
+                    }
+                }
+                int splashScreenThemeResId = 0;
+                if (splashScreenThemeResName != null && !splashScreenThemeResName.isEmpty()) {
+                    try {
+                        final Context packageContext = mAtmService.mContext
+                                .createPackageContext(r.packageName, 0);
+                        splashScreenThemeResId = packageContext.getResources()
+                                .getIdentifier(splashScreenThemeResName, null, null);
+                    } catch (PackageManager.NameNotFoundException
                             | Resources.NotFoundException ignore) {
                         // Just use the default theme
                     }
@@ -7704,17 +7693,23 @@ class Task extends WindowContainer<WindowContainer> {
     void clearLastRecentsAnimationTransaction() {
         mLastRecentsAnimationTransaction = null;
         mLastRecentsAnimationOverlay = null;
-        // reset also the transform introduced by mLastRecentsAnimationTransaction
-        getPendingTransaction().setMatrix(mSurfaceControl, Matrix.IDENTITY_MATRIX, new float[9]);
+        // reset also the crop and transform introduced by mLastRecentsAnimationTransaction
+        getPendingTransaction().setMatrix(mSurfaceControl, Matrix.IDENTITY_MATRIX, new float[9])
+                .setWindowCrop(mSurfaceControl, null)
+                .setCornerRadius(mSurfaceControl, 0);
     }
 
     void maybeApplyLastRecentsAnimationTransaction() {
         if (mLastRecentsAnimationTransaction != null) {
+            final SurfaceControl.Transaction tx = getPendingTransaction();
             if (mLastRecentsAnimationOverlay != null) {
-                getPendingTransaction().reparent(mLastRecentsAnimationOverlay, mSurfaceControl);
+                tx.reparent(mLastRecentsAnimationOverlay, mSurfaceControl);
             }
             PictureInPictureSurfaceTransaction.apply(mLastRecentsAnimationTransaction,
-                    mSurfaceControl, getPendingTransaction());
+                    mSurfaceControl, tx);
+            // If we are transferring the transform from the root task entering PIP, then also show
+            // the new task immediately
+            tx.show(mSurfaceControl);
             mLastRecentsAnimationTransaction = null;
             mLastRecentsAnimationOverlay = null;
         }

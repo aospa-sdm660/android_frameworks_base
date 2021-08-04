@@ -174,16 +174,12 @@ void CanvasContext::setSurface(ANativeWindow* window, bool enableTimeout) {
     ATRACE_CALL();
 
     if (window) {
-        int extraBuffers = 0;
-        native_window_get_extra_buffer_count(window, &extraBuffers);
-
         mNativeSurface = std::make_unique<ReliableSurface>(window);
         mNativeSurface->init();
         if (enableTimeout) {
             // TODO: Fix error handling & re-shorten timeout
             ANativeWindow_setDequeueTimeout(window, 4000_ms);
         }
-        mNativeSurface->setExtraBufferCount(extraBuffers);
     } else {
         mNativeSurface = nullptr;
     }
@@ -197,6 +193,7 @@ void CanvasContext::setSurfaceControl(ASurfaceControl* surfaceControl) {
 
     if (surfaceControl == nullptr) {
         setASurfaceTransactionCallback(nullptr);
+        setPrepareSurfaceControlForWebviewCallback(nullptr);
     }
 
     if (mSurfaceControl != nullptr) {
@@ -204,6 +201,7 @@ void CanvasContext::setSurfaceControl(ASurfaceControl* surfaceControl) {
         funcs.releaseFunc(mSurfaceControl);
     }
     mSurfaceControl = surfaceControl;
+    mSurfaceControlGenerationId++;
     mExpectSurfaceStats = surfaceControl != nullptr;
     if (mSurfaceControl != nullptr) {
         funcs.acquireFunc(mSurfaceControl);
@@ -461,6 +459,7 @@ void CanvasContext::prepareTree(TreeInfo& info, int64_t* uiFrameInfo, int64_t sy
 }
 
 void CanvasContext::stopDrawing() {
+    cleanupResources();
     mRenderThread.removeFrameCallback(this);
     mAnimationContext->pauseAnimators();
     mGenerationID++;
@@ -619,8 +618,23 @@ nsecs_t CanvasContext::draw() {
         }
     }
 
+    cleanupResources();
     mRenderThread.cacheManager().onFrameCompleted();
     return mCurrentFrameInfo->get(FrameInfoIndex::DequeueBufferDuration);
+}
+
+void CanvasContext::cleanupResources() {
+    auto& tracker = mJankTracker.frames();
+    auto size = tracker.size();
+    auto capacity = tracker.capacity();
+    if (size == capacity) {
+        nsecs_t nowNanos = systemTime(SYSTEM_TIME_MONOTONIC);
+        nsecs_t frameCompleteNanos =
+            tracker[0].get(FrameInfoIndex::FrameCompleted);
+        nsecs_t frameDiffNanos = nowNanos - frameCompleteNanos;
+        nsecs_t cleanupMillis = ns2ms(std::max(frameDiffNanos, 10_s));
+        mRenderThread.cacheManager().performDeferredCleanup(cleanupMillis);
+    }
 }
 
 void CanvasContext::reportMetricsWithPresentTime() {
@@ -630,6 +644,7 @@ void CanvasContext::reportMetricsWithPresentTime() {
     if (mNativeSurface == nullptr) {
         return;
     }
+    ATRACE_CALL();
     FrameInfo* forthBehind;
     int64_t frameNumber;
     {  // acquire lock
@@ -680,6 +695,7 @@ void CanvasContext::onSurfaceStatsAvailable(void* context, ASurfaceControl* cont
         frameInfo->set(FrameInfoIndex::FrameCompleted) = std::max(gpuCompleteTime,
                 frameInfo->get(FrameInfoIndex::SwapBuffersCompleted));
         frameInfo->set(FrameInfoIndex::GpuCompleted) = gpuCompleteTime;
+        std::lock_guard(instance->mFrameMetricsReporterMutex);
         instance->mJankTracker.finishFrame(*frameInfo, instance->mFrameMetricsReporter);
     }
 }
@@ -896,9 +912,14 @@ CanvasContext* CanvasContext::getActiveContext() {
 
 bool CanvasContext::mergeTransaction(ASurfaceTransaction* transaction, ASurfaceControl* control) {
     if (!mASurfaceTransactionCallback) return false;
-    std::invoke(mASurfaceTransactionCallback, reinterpret_cast<int64_t>(transaction),
-                reinterpret_cast<int64_t>(control), getFrameNumber());
-    return true;
+    return std::invoke(mASurfaceTransactionCallback, reinterpret_cast<int64_t>(transaction),
+                       reinterpret_cast<int64_t>(control), getFrameNumber());
+}
+
+void CanvasContext::prepareSurfaceControlForWebview() {
+    if (mPrepareSurfaceControlForWebviewCallback) {
+        std::invoke(mPrepareSurfaceControlForWebviewCallback);
+    }
 }
 
 } /* namespace renderthread */

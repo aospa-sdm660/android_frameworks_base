@@ -218,6 +218,9 @@ class ActivityLaunchAnimator(
 
         /** Hide the keyguard and animate using [runner]. */
         fun hideKeyguardWithAnimation(runner: IRemoteAnimationRunner)
+
+        /** Enable/disable window blur so they don't overlap with the window launch animation **/
+        fun setBlursDisabledForAppLaunch(disabled: Boolean)
     }
 
     /**
@@ -234,7 +237,9 @@ class ActivityLaunchAnimator(
              * during the animation.
              */
             @JvmStatic
-            fun fromView(view: View): Controller = GhostedViewLaunchAnimatorController(view)
+            fun fromView(view: View, cujType: Int? = null): Controller {
+                return GhostedViewLaunchAnimatorController(view, cujType)
+            }
         }
 
         /**
@@ -485,6 +490,7 @@ class ActivityLaunchAnimator(
             animator.addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationStart(animation: Animator?, isReverse: Boolean) {
                     Log.d(TAG, "Animation started")
+                    keyguardHandler.setBlursDisabledForAppLaunch(true)
                     controller.onLaunchAnimationStart(isExpandingFullyAbove)
 
                     // Add the drawable to the launch container overlay. Overlays always draw
@@ -495,6 +501,7 @@ class ActivityLaunchAnimator(
 
                 override fun onAnimationEnd(animation: Animator?) {
                     Log.d(TAG, "Animation ended")
+                    keyguardHandler.setBlursDisabledForAppLaunch(false)
                     iCallback?.invoke()
                     controller.onLaunchAnimationEnd(isExpandingFullyAbove)
                     launchContainerOverlay.remove(windowBackgroundLayer)
